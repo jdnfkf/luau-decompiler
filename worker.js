@@ -30,6 +30,11 @@ self.onmessage = async (e) => {
     const ms = performance.now() - t0;
     self.postMessage({ ok: true, id, dialect: dia, source: src, ms });
   } catch (err) {
-    self.postMessage({ ok: false, id, error: String((err && err.message) || err) });
+    let msg;
+    try {
+      msg = (err && err.message) ? String(err.message)
+           : (typeof err === "string" ? err : JSON.stringify(err));
+    } catch (_) { msg = String(err); }
+    self.postMessage({ ok: false, id, error: msg });
   }
 };
