@@ -1,4 +1,4 @@
-/* @ts-self-types="./unluac.d.ts" */
+/* @ts-self-types="./unluac_wasm.d.ts" */
 
 /**
  * @param {Uint8Array} bytes
@@ -265,7 +265,7 @@ function __wbg_get_imports() {
     };
     return {
         __proto__: null,
-        "./unluac_bg.js": import0,
+        "./unluac_wasm_bg.js": import0,
     };
 }
 
@@ -536,7 +536,7 @@ async function __wbg_init(module_or_path) {
     }
 
     if (module_or_path === undefined) {
-        module_or_path = new URL('unluac_bg.wasm', import.meta.url);
+        module_or_path = new URL('unluac_wasm_bg.wasm', import.meta.url);
     }
     const imports = __wbg_get_imports();
 
