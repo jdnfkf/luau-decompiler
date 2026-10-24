@@ -146,7 +146,22 @@
           然后把 <code>x.luau</code> 传到手机，用这个页面打开。</p>
         <p><b>还原度：</b>控制流、字符串常量、表结构、API 调用名全部还原；变量名用启发式从用法反推
           （原游戏里的真名在客户端字节码里已被剥离，Roblox 官方也拿不回来）。</p>
-        <p><b>速度：</b>650 KB 的大文件约 30~60 秒（取决于手机），期间界面不会卡。</p>
+        <p><b>速度：</b>浏览器内引擎 (WebAssembly) 解析 650 KB 约 30~60 秒，手机上还要再慢 3~5 倍。
+           <b>想快就用「🚀 本地加速」</b> —— 见下面。</p>
+        <p><b>🚀 本地加速（推荐，手机上用这个）</b>：你的 Termux 里已经装了原生反编译引擎，
+           跑起来只要 <b>1~2 秒</b>，比浏览器内快 40 倍。步骤：</p>
+        <pre style="max-height:none;margin:8px 0"># 在 Termux 里 (只做一次)
+cd "/storage/emulated/0/1/LunaUX反编译工具-1/lunaux-offline"
+cp /storage/emulated/0/1/LunaUX反编译工具-1/luau-api.sh .
+cp /storage/emulated/0/1/LunaUX反编译工具-1/luau_api_server.py .
+chmod +x luau-api.sh
+
+# 启动 (后台常驻)
+nohup ./luau-api.sh &gt; /dev/null 2&gt;&amp;1 &amp;</pre>
+        <p>然后回到这个页面，点顶部的 <b>🚀 本地加速</b> 按钮，状态变成
+           <span class="ok">"✅ 已连接本地引擎"</span> 就成了。以后拖文件进去会走本地原生引擎。</p>
+        <p><b>为什么浏览器能连 http://127.0.0.1？</b>因为浏览器把 localhost / 127.0.0.1
+           视为安全源，HTTPS 页面也允许请求它。</p>
         <p><b>引擎：</b><span class="mono">unluac-rs</span>（Rust）经 wasm-bindgen 编译成 WebAssembly，在本页内运行；
           Roblox v14 字节码与 opcode 混淆由本引擎自行解析。</p>
       </div>
