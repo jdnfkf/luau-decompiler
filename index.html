@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Luau 反编译器 · 本地运行</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2129; --line:#30363d;
+    --fg:#e6edf3; --dim:#8b949e; --acc:#58a6ff; --ok:#3fb950; --err:#f85149; --warn:#d29922;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:var(--bg); color:var(--fg); min-height:100dvh;
+    font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    padding:20px 16px 60px; -webkit-text-size-adjust:100%;
+  }
+  .wrap{max-width:920px;margin:0 auto}
+  h1{font-size:20px;margin:0 0 4px;display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+  h1 .dot{width:8px;height:8px;border-radius:50%;background:var(--ok);box-shadow:0 0 8px var(--ok)}
+  .sub{color:var(--dim);font-size:13px;margin:0 0 20px}
+  .sub code{background:var(--panel2);padding:1px 5px;border-radius:4px;font-size:12px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:14px}
+  #drop{
+    border:2px dashed var(--line); border-radius:12px; padding:34px 18px; text-align:center;
+    cursor:pointer; transition:.15s; background:var(--panel2);
+  }
+  #drop.hot{border-color:var(--acc);background:#1b2a3f}
+  #drop .big{font-size:16px;margin-bottom:6px}
+  #drop .ico{font-size:30px;margin-bottom:8px}
+  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  button{
+    background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:8px;
+    padding:8px 14px;font-size:14px;cursor:pointer;font-family:inherit;
+  }
+  button:hover:not(:disabled){border-color:var(--acc);color:var(--acc)}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  button.primary{background:var(--acc);border-color:var(--acc);color:#04121f;font-weight:600}
+  button.primary:hover:not(:disabled){filter:brightness(1.12);color:#04121f}
+  #prog{height:6px;background:var(--panel2);border-radius:99px;overflow:hidden;margin-top:12px;display:none}
+  #bar{height:100%;width:0;background:linear-gradient(90deg,var(--acc),#a371f7);transition:width .25s}
+  .stat{font:12px/1.9 var(--mono);color:var(--dim)}
+  .stat b{color:var(--fg);font-weight:600}
+  .ok{color:var(--ok)} .err{color:var(--err)} .warn{color:var(--warn)}
+  pre{
+    margin:0;background:#0a0e14;border:1px solid var(--line);border-radius:8px;padding:12px;
+    max-height:58vh;overflow:auto;font:12.5px/1.55 var(--mono);white-space:pre;tab-size:4;
+  }
+  details summary{cursor:pointer;color:var(--dim);font-size:13px;user-select:none}
+  details summary:hover{color:var(--acc)}
+  .note{font-size:12.5px;color:var(--dim);line-height:1.75}
+  .note b{color:var(--fg)}
+  .badge{
+    display:inline-block;font:11px var(--mono);padding:2px 7px;border-radius:5px;
+    background:var(--panel2);border:1px solid var(--line);color:var(--dim);
+  }
+  .badge.on{background:#12351f;border-color:#1f6f34;color:var(--ok)}
+  .badge.off{background:#3d1d1d;border-color:#6e2b2b;color:var(--err)}
+  input[type=file]{display:none}
+  .sep{height:1px;background:var(--line);margin:14px 0}
+  .mono{font-family:var(--mono);font-size:12.5px}
+  a{color:var(--acc)}
+  .banner{
+    background:#2b2410;border:1px solid #5a4a1c;color:var(--warn);
+    border-radius:8px;padding:9px 12px;font-size:12.5px;line-height:1.6;margin-bottom:10px;
+  }
+  .banner b{color:#f0c674}
+  .spin{display:inline-block;animation:sp 1s linear infinite}
+  @keyframes sp{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1><span class="dot"></span>Luau 反编译器 <span class="badge" id="engBadge">引擎加载中…</span></h1>
+  <p class="sub">
+    Roblox / Luau 字节码 → 源码 · <b>纯浏览器本地运行</b> · 文件不上传任何服务器 ·
+    支持 <code>Luau v3 ~ v14</code>（含 Roblox 客户端的 opcode 混淆）
+  </p>
+
+  <div class="card">
+    <div id="drop">
+      <div class="ico">📦</div>
+      <div class="big"><b>拖进来</b> 或 <b>点击选择</b></div>
+      <div class="note" style="margin-top:6px">支持 .luau / .luac / .bin / .out（Luau 字节码）</div>
+    </div>
+    <input type="file" id="file" accept=".luau,.luac,.bin,.out,application/octet-stream">
+    <div id="prog"><div id="bar"></div></div>
+    <div class="sep"></div>
+    <div class="row">
+      <button class="primary" id="btnDl" disabled>⬇ 下载源码 .lua</button>
+      <button id="btnCopy" disabled>⧉ 复制</button>
+      <span class="stat" id="stat"></span>
+    </div>
+  </div>
+
+  <div class="card" id="outCard" style="display:none">
+    <div class="row" style="justify-content:space-between;margin-bottom:10px">
+      <div class="stat" id="outStat"></div>
+      <span class="badge" id="diaBadge"></span>
+    </div>
+    <div class="banner" id="warnBox" style="display:none">
+      ⚠ 输出带 <b>recovery errors</b> 标记：Roblox 客户端字节码用了 v12+ 的新指令（<code>CALLFB</code> / <code>CMPPROTO</code> 等），
+      本引擎已做等价降级处理，<b>结构与逻辑基本正确</b>，但个别分支可能被合并，不保证能原样重新编译。
+      读代码没问题，<b>要精确到每一行请对照原始文件</b>。
+    </div>
+    <pre id="out"></pre>
+  </div>
+
+  <div class="card">
+    <details>
+      <summary>说明 / 常见问题</summary>
+      <div class="note" style="margin-top:10px">
+        <p><b>这是什么：</b>把 Roblox 游戏里的脚本字节码（<code>getscriptbytecode</code> 导出的那种）还原成可读的 Luau 源码。</p>
+        <p><b>隐私：</b>整个过程在你的浏览器里跑，文件一个字节都不发出去，断网也能用。</p>
+        <p><b>怎么拿到字节码：</b>在执行器里跑
+          <span class="mono" style="color:var(--acc)">writefile("x.luau", getscriptbytecode(目标脚本))</span>
+          然后把 <code>x.luau</code> 传到手机，用这个页面打开。</p>
+        <p><b>还原度：</b>控制流、字符串常量、表结构、API 调用名全部还原；变量名用启发式从用法反推
+          （原游戏里的真名在客户端字节码里已被剥离，Roblox 官方也拿不回来）。</p>
+        <p><b>速度：</b>650 KB 的大文件约 30~60 秒（取决于手机），期间界面不会卡。</p>
+        <p><b>引擎：</b><span class="mono">unluac-rs</span>（Rust）经 wasm-bindgen 编译成 WebAssembly，在本页内运行；
+          Roblox v14 字节码与 opcode 混淆由本引擎自行解析。</p>
+      </div>
+    </details>
+  </div>
+
+  <div class="card">
+    <details>
+      <summary><b>API 用法</b>（可编程调用）</summary>
+      <div class="note" style="margin-top:10px">
+        <p>页面暴露了一个全局函数，在控制台 / 油猴脚本 / 其他页面里都能直接调：</p>
+        <pre style="max-height:none;margin:8px 0">const src = await window.luauDecompile(uint8array);   // → 源码字符串
+const dia = await window.luauDetect(uint8array);   // → "luau" / "luaujit" / ...</pre>
+        <p><b>字节码从哪来：</b>执行器里
+          <span class="mono" style="color:var(--acc)">writefile("x.luau", getscriptbytecode(目标脚本))</span>
+          → 用 <code>http.read("x.luau")</code> 读成 string → 转 Uint8Array。</p>
+        <p><b>可选参数：</b></p>
+        <pre style="max-height:none;margin:8px 0">await window.luauDecompile(bytes, {
+  naming:   { mode: "heuristic" },        // "debug-like" | "simple" | "heuristic"
+  generate: { mode: "permissive",         // "strict" | "permissive"
+              luauVectorConstructor: { constructor: "vector", size: 3 } }
+});</pre>
+        <p class="warn" style="color:var(--warn)">⚠ 本页<b>没有 HTTP 接口</b>（纯静态站，POST /decompile 不会通）。
+          想要真·HTTP API 请看下面说明。</p>
+      </div>
+    </details>
+  </div>
+</div>
+
+<script type="module">
+const $ = (id) => document.getElementById(id);
+let worker = null, currentSource = "", curName = "output.lua";
+let seq = 0;
+const pending = new Map();
+
+const DEFAULT_OPTS = {
+  dialect: "auto",
+  naming: { mode: "heuristic" },
+  generate: {
+    mode: "permissive",
+    comment: true,
+    luauVectorConstructor: { constructor: "vector", size: 3 }
+  }
+};
+
+// ---------- 公开 JS API ----------
+// 用法: const src = await window.luauDecompile(uint8array)
+function callEngine(bytes, opts) {
+  return new Promise((resolve, reject) => {
+    if (!worker) { reject(new Error("引擎还没加载好")); return; }
+    const id = ++seq;
+    pending.set(id, { resolve, reject });
+    worker.postMessage({ bytes, opts: opts || DEFAULT_OPTS, id }, [bytes.buffer]);
+  });
+}
+window.luauDecompile = async function (bytes, opts) {
+  const b = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  const r = await callEngine(b, opts);
+  return r.source;
+};
+window.luauDetect = async function (bytes) {
+  const b = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  const r = await callEngine(b, { ...DEFAULT_OPTS, generate: { ...DEFAULT_OPTS.generate, comment: false } });
+  return r.dialect;
+};
+window.luauDefaultOptions = DEFAULT_OPTS;
+// ------------------------------
+
+function setStat(html) { $("stat").innerHTML = html; }
+function progress(p, on) {
+  $("prog").style.display = on ? "block" : "none";
+  $("bar").style.width = (p * 100) + "%";
+}
+
+function boot() {
+  try {
+    worker = new Worker("./worker.js", { type: "module" });
+    worker.onmessage = (e) => {
+      const d = e.data;
+      if (d.id) {                          // API 调用路径
+        const p = pending.get(d.id);
+        if (p) {
+          pending.delete(d.id);
+          if (!d.ok) p.reject(new Error(d.error));
+          else p.resolve(d);
+        }
+        return;
+      }
+      if (!d.ok) {
+        setStat('<span class="err">反编译失败: ' + d.error + "</span>");
+        progress(1, false);
+        return;
+      }
+      progress(1, true);
+      currentSource = d.source;
+      $("out").textContent = d.source;
+      $("outCard").style.display = "block";
+      $("btnDl").disabled = false; $("btnCopy").disabled = false;
+      $("diaBadge").textContent = "方言: " + d.dialect;
+      if (/recovery errors/.test(d.source)) $("warnBox").style.display = "block";
+      const ms = d.ms.toFixed(0);
+      setStat(`<b>${curName}</b> · 输出 <b>${d.source.length.toLocaleString()}</b> 字符 · <b>${ms} ms</b>`);
+      $("outStat").innerHTML = `输出 <b>${d.source.length.toLocaleString()}</b> 字符 / ${d.source.split("\\n").length} 行 · 耗时 ${ms} ms`;
+      setTimeout(() => progress(0, false), 600);
+    };
+    worker.onerror = (e) => {
+      $("engBadge").textContent = "引擎出错 ❌";
+      $("engBadge").className = "badge off";
+      setStat('<span class="err">' + (e.message || "worker error") + "</span>");
+    };
+    $("engBadge").textContent = "引擎就绪 ✅";
+    $("engBadge").className = "badge on";
+  } catch (e) {
+    $("engBadge").textContent = "引擎加载失败 ❌";
+    $("engBadge").className = "badge off";
+    setStat('<span class="err">' + String(e && e.message || e) + "</span>");
+  }
+}
+
+async function handle(file) {
+  if (!file) return;
+  if (!worker) { setStat('<span class="err">引擎还没加载好</span>'); return; }
+  curName = file.name.replace(/\.(luau|luac|bin|out)$/i, "") + ".lua";
+  const kb = file.size / 1024;
+  progress(0.15, true);
+  setStat(`读取 <b>${file.name}</b> (${kb.toFixed(1)} KB) …`);
+  try {
+    const buf = new Uint8Array(await file.arrayBuffer());
+    progress(0.4, true);
+    worker.postMessage({ bytes: buf, opts: DEFAULT_OPTS }, [buf.buffer]);
+    if (kb > 200) {
+      setStat(`读取 <b>${file.name}</b> (${kb.toFixed(1)} KB) — <b>大文件,可能要几十秒…</b>`);
+    }
+  } catch (e) {
+    setStat('<span class="err">读取失败: ' + String(e && e.message || e) + "</span>");
+    progress(1, false);
+  }
+}
+
+$("drop").addEventListener("click", () => $("file").click());
+$("file").addEventListener("change", (e) => handle(e.target.files[0]));
+["dragenter","dragover"].forEach(ev => $("drop").addEventListener(ev, e => { e.preventDefault(); $("drop").classList.add("hot"); }));
+["dragleave","drop"].forEach(ev => $("drop").addEventListener(ev, e => { e.preventDefault(); $("drop").classList.remove("hot"); }));
+$("drop").addEventListener("drop", e => { const f = e.dataTransfer.files[0]; if (f) handle(f); });
+
+$("btnDl").addEventListener("click", () => {
+  const b = new Blob([currentSource], { type: "text/plain;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(b); a.download = curName; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+});
+$("btnCopy").addEventListener("click", async () => {
+  try { await navigator.clipboard.writeText(currentSource); setStat('<span class="ok">已复制到剪贴板</span>'); }
+  catch (e) { setStat('<span class="err">复制失败: ' + e.message + "</span>"); }
+});
+
+boot();
+</script>
+</body>
+</html>
