@@ -15,7 +15,7 @@ const FAST_SKIP = [
 
 const DEFAULT_OPTS = {
   dialect: "auto",
-  naming: { mode: "heuristic" },
+  naming: { mode: "simple" },
   readability: {
     returnInlineMaxComplexity: 2,
     indexInlineMaxComplexity: 2,

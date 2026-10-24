@@ -221,7 +221,10 @@ function buildOpts(fast) {
   if (fast) readability.skipPasses = FAST_SKIP;
   return {
     dialect: "auto",
-    naming: { mode: "heuristic" },
+    // 快速模式下变量没被"提升"成局部变量, heuristic 会误用脚本里的真名当临时变量,
+    // 反而更迷惑 → 改用 simple (统一编号, 不会误导)
+    // 完整模式下变量提升过了, heuristic 能反推出真名 → 更好读
+    naming: { mode: fast ? "simple" : "heuristic" },
     readability,
     generate: {
       mode: "permissive",
