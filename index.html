@@ -89,7 +89,7 @@
 </head>
 <body>
 <div class="wrap">
-  <h1><span class="dot"></span>Luau 反编译器 <span class="badge" id="engBadge">引擎加载中…</span></h1>
+  <h1><span class="dot"></span>Luau 反编译器 <span class="badge" id="engBadge">引擎预热中…</span></h1>
   <p class="sub">
     Roblox / Luau 字节码 → 源码 · <b>纯浏览器本地运行</b> · 文件不上传任何服务器 ·
     支持 <code>Luau v3 ~ v14</code>（含 Roblox 客户端的 opcode 混淆）
@@ -302,6 +302,17 @@ function boot() {
     worker = new Worker("./worker.js", { type: "module" });
     worker.onmessage = (e) => {
       const d = e.data;
+      if (d.warm) {                        // 预热完成/失败通知
+        if (d.ok) {
+          $("engBadge").textContent = "引擎就绪 ✅";
+          $("engBadge").className = "badge on";
+        } else {
+          $("engBadge").textContent = "引擎加载失败 ❌";
+          $("engBadge").className = "badge off";
+          setStat('<span class="err">引擎加载失败: ' + d.error + "</span>");
+        }
+        return;
+      }
       if (d.id) {                          // API 调用路径
         const p = pending.get(d.id);
         if (p) {
@@ -324,8 +335,7 @@ function boot() {
       $("engBadge").className = "badge off";
       setStat('<span class="err">' + (e.message || "worker error") + "</span>");
     };
-    $("engBadge").textContent = "引擎就绪 ✅";
-    $("engBadge").className = "badge on";
+    $("engBadge").textContent = "引擎预热中…";
   } catch (e) {
     $("engBadge").textContent = "引擎加载失败 ❌";
     $("engBadge").className = "badge off";

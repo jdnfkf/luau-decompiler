@@ -2,6 +2,7 @@
 import init, { decompile, detectDialect } from "./unluac_wasm.js";
 
 let ready = false;
+let bootError = null;
 
 const DEFAULT_OPTS = {
   dialect: "auto",
@@ -20,10 +21,17 @@ async function ensure() {
   }
 }
 
+// ★ 页面一打开就开始下载 + JIT 预热 wasm, 不等用户拖文件
+//   15MB 的 wasm 光下载+JIT 就要 ~35 秒, 提前跑掉能省一半等待
+ensure()
+  .then(() => self.postMessage({ ok: true, warm: true }))
+  .catch((e) => { bootError = String((e && e.message) || e); self.postMessage({ ok: false, warm: true, error: bootError }); });
+
 self.onmessage = async (e) => {
   const { bytes, opts, id } = e.data;
   try {
-    await ensure();
+    try { await ensure(); }
+    catch (e) { throw new Error(bootError || String(e)); }
     const t0 = performance.now();
     const dia = detectDialect(bytes);
     const src = decompile(bytes, opts || DEFAULT_OPTS);
