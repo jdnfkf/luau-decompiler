@@ -104,6 +104,7 @@
     <input type="file" id="file" accept=".luau,.luac,.bin,.out,application/octet-stream">
     <div class="row" style="margin-top:12px">
       <button id="btnLocal" title="如果你在 Termux 里跑了 luau-api.sh，点这个能快 10 倍">🚀 本地加速</button>
+      <button id="btnMode" title="快速模式跳过纯美化 pass, 快 3~4 倍, 但输出会多一点临时变量">⚡ 快速模式</button>
       <span class="stat" id="localStat">未检测</span>
       <input id="port" type="number" value="8787" min="1" max="65535" style="width:78px;background:var(--panel2);border:1px solid var(--line);border-radius:6px;color:var(--fg);padding:6px 8px;font:13px var(--mono)">
       <span class="stat">端口</span>
@@ -197,15 +198,40 @@ let worker = null, currentSource = "", curName = "output.lua";
 let seq = 0;
 const pending = new Map();
 
-const DEFAULT_OPTS = {
-  dialect: "auto",
-  naming: { mode: "heuristic" },
-  generate: {
-    mode: "permissive",
-    comment: true,
-    luauVectorConstructor: { constructor: "vector", size: 3 }
-  }
-};
+// 跳过的 HIR pass —— 这些只影响"输出好不好看", 不影响语义。
+// 跳掉之后连 "closure-effects" 数据流分析都不用算, 大文件能快 3~4 倍。
+const FAST_SKIP = [
+  "table-constructors",
+  "temp-inline",
+  "repeat-root-lifetimes",
+  "native-call-frames",
+  "source-frame-materializations",
+  "lower-fixed-table-batches"
+];
+
+let fastMode = true;   // 默认快速模式
+
+function buildOpts(fast) {
+  const readability = {
+    returnInlineMaxComplexity: 2,
+    indexInlineMaxComplexity: 2,
+    argsInlineMaxComplexity: 2,
+    accessBaseInlineMaxComplexity: 2
+  };
+  if (fast) readability.skipPasses = FAST_SKIP;
+  return {
+    dialect: "auto",
+    naming: { mode: "heuristic" },
+    readability,
+    generate: {
+      mode: "permissive",
+      comment: true,
+      luauVectorConstructor: { constructor: "vector", size: 3 }
+    }
+  };
+}
+
+const DEFAULT_OPTS = buildOpts(fastMode);
 
 // ---------- 本地加速 (Termux 原生引擎, 快 10~50 倍) ----------
 // 浏览器把 127.0.0.1 视为安全源, 所以 HTTPS 页面也能请求 http://127.0.0.1
@@ -384,7 +410,7 @@ async function handle(file) {
     }
 
     startWorking(kb);
-    worker.postMessage({ bytes: buf, opts: DEFAULT_OPTS }, [buf.buffer]);
+    worker.postMessage({ bytes: buf, opts: buildOpts(fastMode) }, [buf.buffer]);
   } catch (e) {
     stopWorking();
     setStat('<span class="err">读取失败: ' + String(e && e.message || e) + "</span>");
@@ -408,6 +434,18 @@ $("btnCopy").addEventListener("click", async () => {
   try { await navigator.clipboard.writeText(currentSource); setStat('<span class="ok">已复制到剪贴板</span>'); }
   catch (e) { setStat('<span class="err">复制失败: ' + e.message + "</span>"); }
 });
+
+// 模式切换
+$("btnMode").addEventListener("click", () => {
+  fastMode = !fastMode;
+  const b = $("btnMode");
+  b.textContent = fastMode ? "⚡ 快速模式" : "📖 完整模式";
+  b.classList.toggle("primary", fastMode);
+  setStat(fastMode
+    ? '<span class="ok">快速模式: 跳过 6 个纯美化 pass, 650KB 约 10~13 秒, 输出临时变量会多一些</span>'
+    : '<span class="warn">完整模式: 所有美化 pass 都跑, 650KB 约 40 秒, 输出更漂亮</span>');
+});
+$("btnMode").classList.add("primary");
 
 // 本地加速按钮
 $("btnLocal").addEventListener("click", async () => {

@@ -4,9 +4,25 @@ import init, { decompile, detectDialect } from "./unluac_wasm.js";
 let ready = false;
 let bootError = null;
 
+const FAST_SKIP = [
+  "table-constructors",
+  "temp-inline",
+  "repeat-root-lifetimes",
+  "native-call-frames",
+  "source-frame-materializations",
+  "lower-fixed-table-batches"
+];
+
 const DEFAULT_OPTS = {
   dialect: "auto",
   naming: { mode: "heuristic" },
+  readability: {
+    returnInlineMaxComplexity: 2,
+    indexInlineMaxComplexity: 2,
+    argsInlineMaxComplexity: 2,
+    accessBaseInlineMaxComplexity: 2,
+    skipPasses: FAST_SKIP
+  },
   generate: {
     mode: "permissive",
     comment: true,
