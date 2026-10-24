@@ -95,6 +95,16 @@
     支持 <code>Luau v3 ~ v14</code>（含 Roblox 客户端的 opcode 混淆）
   </p>
 
+  <div class="card" id="engCard" style="display:none">
+    <div class="row" style="justify-content:space-between">
+      <span class="stat" id="engMsg">引擎加载中…</span>
+      <span class="stat" id="engPct"></span>
+    </div>
+    <div id="engProg" style="height:5px;background:var(--panel2);border-radius:99px;overflow:hidden;margin-top:8px">
+      <div id="engBar" style="height:100%;width:0;background:linear-gradient(90deg,var(--acc),#a371f7);transition:width .2s"></div>
+    </div>
+  </div>
+
   <div class="card">
     <div id="drop">
       <div class="ico">📦</div>
@@ -331,10 +341,32 @@ function boot() {
     worker = new Worker("./worker.js", { type: "module" });
     worker.onmessage = (e) => {
       const d = e.data;
+      if (d.progress) {                   // 引擎下载进度
+        const p = d.progress;
+        $("engCard").style.display = "block";
+        if (p.phase === "cache") {
+          $("engMsg").innerHTML = "✅ 引擎已从本地缓存加载 (秒开)";
+          $("engPct").textContent = "";
+          $("engBar").style.width = "100%";
+        } else if (p.phase === "progress") {
+          $("engMsg").innerHTML = "⬇️ 正在下载引擎 (11 MB)" +
+            (p.total ? ` · ${(p.received / 1048576).toFixed(1)} / ${(p.total / 1048576).toFixed(1)} MB` : "");
+          $("engPct").textContent = p.pct + "%";
+          $("engBar").style.width = p.pct + "%";
+        } else if (p.phase === "retry") {
+          $("engMsg").innerHTML = `<span class="warn">网络中断, 正在重试 (${p.attempt}/${p.max})…</span>`;
+          $("engPct").textContent = "";
+        } else if (p.phase === "download") {
+          $("engMsg").innerHTML = `⬇️ 正在下载引擎 (第 ${p.attempt}/${p.max} 次尝试)`;
+        }
+        return;
+      }
       if (d.warm) {                        // 预热完成/失败通知
         if (d.ok) {
           $("engBadge").textContent = "引擎就绪 ✅";
           $("engBadge").className = "badge on";
+          $("engMsg").innerHTML = "✅ 引擎就绪, 可以拖文件了";
+          $("engBar").style.width = "100%";
         } else {
           $("engBadge").textContent = "引擎加载失败 ❌";
           $("engBadge").className = "badge off";
