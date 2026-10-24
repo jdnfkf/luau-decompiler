@@ -5,13 +5,13 @@
 //   新旧 wasm 的 import 模块名一旦不同, 混搭就会报
 //   "Import #0 ...: module is not an object or function"。
 //   用 ?v= 强制换 URL, 绕开所有旧缓存。
-import init, { decompile, detectDialect } from "./unluac_wasm.js?v=3";
+import init, { decompile, detectDialect } from "./unluac_wasm.v3.js?v=3";
 
 let ready = false;
 let bootError = null;
 
 const VER = "v3";
-const WASM_URL = new URL("./unluac_wasm_bg.wasm?v=" + VER, import.meta.url);
+const WASM_URL = new URL("./unluac_wasm_bg.v3.wasm?v=" + VER, import.meta.url);
 const CACHE_NAME = "luau-decompiler-wasm-" + VER;
 
 const FAST_SKIP = [
@@ -122,7 +122,7 @@ async function hardResetWasm() {
       }
     }
   } catch (e) { /* 清不掉就算了, 下面还是会强制拉新 */ }
-  const bustUrl = new URL("./unluac_wasm_bg.wasm?bust=" + Date.now(), import.meta.url);
+  const bustUrl = new URL("./unluac_wasm_bg.v3.wasm?bust=" + Date.now(), import.meta.url);
   const res = await fetch(bustUrl, { cache: "no-store" });
   if (!res.ok) throw new Error("重新下载引擎失败: HTTP " + res.status);
   return await res.arrayBuffer();

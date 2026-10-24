@@ -266,6 +266,11 @@ function __wbg_get_imports() {
     return {
         __proto__: null,
         "./unluac_bg.js": import0,
+        // ★ 同时提供旧版 key: 浏览器/CacheStorage 里可能还缓存着另一代 wasm,
+        //   而 wasm 的 import 模块名是编译期烧死的, 混搭就报
+        //   "Import #0 ...: module is not an object or function"。
+        //   两个 key 都给上, 任意新旧组合都能初始化成功。
+        "./unluac_wasm_bg.js": import0,
     };
 }
 

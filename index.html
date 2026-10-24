@@ -117,6 +117,8 @@
       <button id="btnMode" title="点一下切换模式">📖 切到完整模式</button>
       <span class="badge" id="modeBadge">当前: ⚡ 快速 (13 秒)</span>
       <span class="stat" id="localStat">未检测</span>
+      <button id="btnClean" title="如果提示引擎加载失败或结果不对，点这个清掉浏览器缓存重新加载">🧹 清缓存重载</button>
+      <span class="badge" id="verBadge" title="引擎版本">v3</span>
       <input id="port" type="number" value="8787" min="1" max="65535" style="width:78px;background:var(--panel2);border:1px solid var(--line);border-radius:6px;color:var(--fg);padding:6px 8px;font:13px var(--mono)">
       <span class="stat">端口</span>
     </div>
@@ -351,7 +353,7 @@ function stopWorking() {
 
 function boot() {
   try {
-    worker = new Worker("./worker.js", { type: "module" });
+    worker = new Worker("./worker.v3.js?v=3", { type: "module" });
     worker.onmessage = (e) => {
       const d = e.data;
       if (d.progress) {                   // 引擎下载进度
@@ -498,6 +500,25 @@ $("btnMode").addEventListener("click", () => {
     : '<span class="warn">已切到完整模式: 650KB 约 40 秒(手机更久), 输出更漂亮</span>');
 });
 paintMode();
+
+// ★ 一键清掉所有引擎缓存并强制重新加载
+//   浏览器 HTTP 缓存 + CacheStorage 都会留旧版 wasm,
+//   新旧混搭会报 "Import #0 ...: module is not an object or function"。
+$("btnClean").addEventListener("click", async () => {
+  const b = $("btnClean");
+  b.disabled = true; b.textContent = "清理中…";
+  try {
+    if (typeof caches !== "undefined") {
+      const names = await caches.keys();
+      for (const n of names) {
+        if (n.indexOf("luau-decompiler") === 0) await caches.delete(n);
+      }
+    }
+  } catch (e) { /* 清不掉就算了 */ }
+  // 带时间戳重新加载, 连 index.html 本身的 HTTP 缓存也绕开
+  location.replace(location.pathname + "?clean=" + Date.now());
+});
+
 
 // 本地加速按钮
 $("btnLocal").addEventListener("click", async () => {
