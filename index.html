@@ -41,6 +41,22 @@
   button.primary:hover:not(:disabled){filter:brightness(1.12);color:#04121f}
   #prog{height:6px;background:var(--panel2);border-radius:99px;overflow:hidden;margin-top:12px;display:none}
   #bar{height:100%;width:0;background:linear-gradient(90deg,var(--acc),#a371f7);transition:width .25s}
+  /* 不确定进度: 不知道真进度时用跑马灯, 比死进度条诚实 */
+  #prog.busy #bar{
+    width:35%; transition:none;
+    animation:slide 1.15s ease-in-out infinite;
+  }
+  @keyframes slide{0%{margin-left:-35%}100%{margin-left:100%}}
+  .spin{display:inline-block;animation:sp 1s linear infinite}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  .working{
+    display:flex;align-items:center;gap:9px;flex-wrap:wrap;
+    background:#12233a;border:1px solid #1f4b7a;border-radius:9px;
+    padding:11px 13px;margin-top:12px;font-size:13px;line-height:1.6
+  }
+  .working .sp{font-size:19px;line-height:1}
+  .working .t{font-family:var(--mono);color:var(--acc);font-weight:600}
+  .working .h{color:var(--dim);font-size:12px;width:100%}
   .stat{font:12px/1.9 var(--mono);color:var(--dim)}
   .stat b{color:var(--fg);font-weight:600}
   .ok{color:var(--ok)} .err{color:var(--err)} .warn{color:var(--warn)}
@@ -86,7 +102,18 @@
       <div class="note" style="margin-top:6px">支持 .luau / .luac / .bin / .out（Luau 字节码）</div>
     </div>
     <input type="file" id="file" accept=".luau,.luac,.bin,.out,application/octet-stream">
+    <div class="row" style="margin-top:12px">
+      <button id="btnLocal" title="如果你在 Termux 里跑了 luau-api.sh，点这个能快 10 倍">🚀 本地加速</button>
+      <span class="stat" id="localStat">未检测</span>
+      <input id="port" type="number" value="8787" min="1" max="65535" style="width:78px;background:var(--panel2);border:1px solid var(--line);border-radius:6px;color:var(--fg);padding:6px 8px;font:13px var(--mono)">
+      <span class="stat">端口</span>
+    </div>
     <div id="prog"><div id="bar"></div></div>
+    <div class="working" id="working" style="display:none">
+      <span class="sp spin">⏳</span>
+      <span>正在反编译… 已运行 <span class="t" id="elapsed">0.0</span> 秒</span>
+      <span class="h" id="workingHint"></span>
+    </div>
     <div class="sep"></div>
     <div class="row">
       <button class="primary" id="btnDl" disabled>⬇ 下载源码 .lua</button>
@@ -165,6 +192,43 @@ const DEFAULT_OPTS = {
   }
 };
 
+// ---------- 本地加速 (Termux 原生引擎, 快 10~50 倍) ----------
+// 浏览器把 127.0.0.1 视为安全源, 所以 HTTPS 页面也能请求 http://127.0.0.1
+let localOn = false;
+function localBase() {
+  const p = ($("port") && $("port").value) || "8787";
+  return "http://127.0.0.1:" + p;
+}
+async function probeLocal() {
+  const ctl = new AbortController();
+  const to = setTimeout(() => ctl.abort(), 2500);
+  try {
+    const r = await fetch(localBase() + "/health", { signal: ctl.signal, cache: "no-store" });
+    if (r.ok) {
+      const j = await r.json();
+      if (j && j.ok) {
+        localOn = true;
+        $("localStat").innerHTML = '<span class="ok">✅ 已连接本地引擎 (原生, 最快)</span>';
+        return true;
+      }
+    }
+  } catch (e) { /* 没开服务, 正常 */ }
+  finally { clearTimeout(to); }
+  localOn = false;
+  $("localStat").innerHTML = '<span class="warn">未检测到本地服务 (将用浏览器内引擎)</span>';
+  return false;
+}
+async function decompileLocal(bytes) {
+  const r = await fetch(localBase() + "/decompile/raw", {
+    method: "POST",
+    // text/plain 是 CORS 简单请求类型, 不用预检, 也避免混合内容被拦
+    headers: { "Content-Type": "text/plain;charset=UTF-8" },
+    body: bytes
+  });
+  if (!r.ok) throw new Error("本地服务返回 HTTP " + r.status);
+  return await r.text();
+}
+
 // ---------- 公开 JS API ----------
 // 用法: const src = await window.luauDecompile(uint8array)
 function callEngine(bytes, opts) {
@@ -177,6 +241,9 @@ function callEngine(bytes, opts) {
 }
 window.luauDecompile = async function (bytes, opts) {
   const b = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  if (localOn) {
+    try { return await decompileLocal(b); } catch (e) { /* 掉回 wasm */ }
+  }
   const r = await callEngine(b, opts);
   return r.source;
 };
@@ -194,6 +261,27 @@ function progress(p, on) {
   $("bar").style.width = (p * 100) + "%";
 }
 
+// ---- 计时器: 反编译是同步调用, 拿不到真实进度, 只能告诉用户"还在跑" ----
+let timer = null, t0 = 0;
+function startWorking(kb) {
+  $("working").style.display = "flex";
+  $("prog").classList.add("busy");
+  const hint = kb > 400
+    ? "大文件在手机浏览器里可能要 1~5 分钟（引擎是纯 WebAssembly，比电脑上慢不少）。请保持页面在前台，别锁屏。"
+    : "手机浏览器里大概几十秒，请保持页面在前台别锁屏。";
+  $("workingHint").textContent = hint;
+  t0 = Date.now();
+  const tick = () => { $("elapsed").textContent = ((Date.now() - t0) / 1000).toFixed(1); };
+  tick();
+  clearInterval(timer);
+  timer = setInterval(tick, 100);
+}
+function stopWorking() {
+  clearInterval(timer); timer = null;
+  $("working").style.display = "none";
+  $("prog").classList.remove("busy");
+}
+
 function boot() {
   try {
     worker = new Worker("./worker.js", { type: "module" });
@@ -209,21 +297,12 @@ function boot() {
         return;
       }
       if (!d.ok) {
+        stopWorking();
         setStat('<span class="err">反编译失败: ' + d.error + "</span>");
         progress(1, false);
         return;
       }
-      progress(1, true);
-      currentSource = d.source;
-      $("out").textContent = d.source;
-      $("outCard").style.display = "block";
-      $("btnDl").disabled = false; $("btnCopy").disabled = false;
-      $("diaBadge").textContent = "方言: " + d.dialect;
-      if (/recovery errors/.test(d.source)) $("warnBox").style.display = "block";
-      const ms = d.ms.toFixed(0);
-      setStat(`<b>${curName}</b> · 输出 <b>${d.source.length.toLocaleString()}</b> 字符 · <b>${ms} ms</b>`);
-      $("outStat").innerHTML = `输出 <b>${d.source.length.toLocaleString()}</b> 字符 / ${d.source.split("\\n").length} 行 · 耗时 ${ms} ms`;
-      setTimeout(() => progress(0, false), 600);
+      showResult(d.source, d.ms.toFixed(0), d.dialect);
     };
     worker.onerror = (e) => {
       $("engBadge").textContent = "引擎出错 ❌";
@@ -239,6 +318,20 @@ function boot() {
   }
 }
 
+function showResult(src, ms, dialect) {
+  stopWorking();
+  progress(1, true);
+  currentSource = src;
+  $("out").textContent = src;
+  $("outCard").style.display = "block";
+  $("btnDl").disabled = false; $("btnCopy").disabled = false;
+  if (dialect) $("diaBadge").textContent = "方言: " + dialect;
+  if (/recovery errors/.test(src)) $("warnBox").style.display = "block";
+  setStat(`<b>${curName}</b> · 输出 <b>${src.length.toLocaleString()}</b> 字符 · <b>${ms} ms</b>`);
+  $("outStat").innerHTML = `输出 <b>${src.length.toLocaleString()}</b> 字符 / ${src.split("\n").length} 行 · 耗时 ${ms} ms`;
+  setTimeout(() => progress(0, false), 600);
+}
+
 async function handle(file) {
   if (!file) return;
   if (!worker) { setStat('<span class="err">引擎还没加载好</span>'); return; }
@@ -249,11 +342,26 @@ async function handle(file) {
   try {
     const buf = new Uint8Array(await file.arrayBuffer());
     progress(0.4, true);
-    worker.postMessage({ bytes: buf, opts: DEFAULT_OPTS }, [buf.buffer]);
-    if (kb > 200) {
-      setStat(`读取 <b>${file.name}</b> (${kb.toFixed(1)} KB) — <b>大文件,可能要几十秒…</b>`);
+
+    // 优先走本地原生引擎 (快 10~50 倍)
+    if (localOn) {
+      startWorking(kb);
+      const t0 = Date.now();
+      try {
+        const src = await decompileLocal(buf);
+        showResult(src, Date.now() - t0, "");
+        return;
+      } catch (e) {
+        localOn = false;
+        $("localStat").innerHTML = '<span class="warn">本地服务掉了, 改用浏览器内引擎</span>';
+        stopWorking();
+      }
     }
+
+    startWorking(kb);
+    worker.postMessage({ bytes: buf, opts: DEFAULT_OPTS }, [buf.buffer]);
   } catch (e) {
+    stopWorking();
     setStat('<span class="err">读取失败: ' + String(e && e.message || e) + "</span>");
     progress(1, false);
   }
@@ -275,6 +383,17 @@ $("btnCopy").addEventListener("click", async () => {
   try { await navigator.clipboard.writeText(currentSource); setStat('<span class="ok">已复制到剪贴板</span>'); }
   catch (e) { setStat('<span class="err">复制失败: ' + e.message + "</span>"); }
 });
+
+// 本地加速按钮
+$("btnLocal").addEventListener("click", async () => {
+  $("localStat").innerHTML = "检测中…";
+  const ok = await probeLocal();
+  if (ok) setStat('<span class="ok">本地引擎已连上, 大文件会快很多 🚀</span>');
+});
+$("port").addEventListener("change", () => probeLocal());
+
+// 启动时自动探一次
+setTimeout(() => probeLocal(), 1200);
 
 boot();
 </script>
