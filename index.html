@@ -114,7 +114,8 @@
     <input type="file" id="file" accept=".luau,.luac,.bin,.out,application/octet-stream">
     <div class="row" style="margin-top:12px">
       <button id="btnLocal" title="如果你在 Termux 里跑了 luau-api.sh，点这个能快 10 倍">🚀 本地加速</button>
-      <button id="btnMode" title="快速模式跳过纯美化 pass, 快 3~4 倍, 但输出会多一点临时变量">⚡ 快速模式</button>
+      <button id="btnMode" title="点一下切换模式">📖 切到完整模式</button>
+      <span class="badge" id="modeBadge">当前: ⚡ 快速 (13 秒)</span>
       <span class="stat" id="localStat">未检测</span>
       <input id="port" type="number" value="8787" min="1" max="65535" style="width:78px;background:var(--panel2);border:1px solid var(--line);border-radius:6px;color:var(--fg);padding:6px 8px;font:13px var(--mono)">
       <span class="stat">端口</span>
@@ -320,15 +321,27 @@ let timer = null, t0 = 0;
 function startWorking(kb) {
   $("working").style.display = "flex";
   $("prog").classList.add("busy");
-  const hint = kb > 400
-    ? "大文件在手机浏览器里可能要 1~5 分钟（引擎是纯 WebAssembly，比电脑上慢不少）。请保持页面在前台，别锁屏。"
-    : "手机浏览器里大概几十秒，请保持页面在前台别锁屏。";
+  const hint = fastMode
+    ? (kb > 400
+        ? "快速模式 · 大文件在手机浏览器里大概 20~60 秒（引擎是纯 WebAssembly，比电脑慢 2~3 倍）。请保持页面在前台，别锁屏。"
+        : "快速模式 · 手机浏览器里大概 10~30 秒，请保持页面在前台别锁屏。")
+    : (kb > 400
+        ? "完整模式 · 手机上可能要 2~5 分钟（所有美化 pass 都跑）。想要快就点「⚡ 切到快速模式」。"
+        : "完整模式 · 手机上大概 40~90 秒，想要快就点「⚡ 切到快速模式」。");
   $("workingHint").textContent = hint;
   t0 = Date.now();
   const tick = () => { $("elapsed").textContent = ((Date.now() - t0) / 1000).toFixed(1); };
   tick();
   clearInterval(timer);
   timer = setInterval(tick, 100);
+  // 完整模式在手机上可能要好几分钟 —— 给个"要不要切快速"的提示
+  setTimeout(() => {
+    if ($("working").style.display !== "none" && !fastMode) {
+      $("workingHint").innerHTML =
+        '<b style="color:#f0c674">完整模式在手机上很慢</b> —— 点上面的「⚡ 切到快速模式」能快 3 倍。' +
+        (kb > 200 ? "(当前这个还在跑, 切了要重拖一次)" : "");
+    }
+  }, 25000);
 }
 function stopWorking() {
   clearInterval(timer); timer = null;
@@ -470,17 +483,21 @@ $("btnCopy").addEventListener("click", async () => {
   catch (e) { setStat('<span class="err">复制失败: ' + e.message + "</span>"); }
 });
 
-// 模式切换
+// 模式切换 —— 按钮显示"点了会切到哪个", 当前模式单独用徽章显示
+function paintMode() {
+  $("btnMode").textContent = fastMode ? "📖 切到完整模式" : "⚡ 切到快速模式";
+  $("btnMode").classList.toggle("primary", !fastMode);
+  $("modeBadge").textContent = fastMode ? "当前: ⚡ 快速 (13 秒)" : "当前: 📖 完整 (40 秒+)";
+  $("modeBadge").className = "badge " + (fastMode ? "on" : "off");
+}
 $("btnMode").addEventListener("click", () => {
   fastMode = !fastMode;
-  const b = $("btnMode");
-  b.textContent = fastMode ? "⚡ 快速模式" : "📖 完整模式";
-  b.classList.toggle("primary", fastMode);
+  paintMode();
   setStat(fastMode
-    ? '<span class="ok">快速模式: 跳过 6 个纯美化 pass, 650KB 约 10~13 秒, 输出临时变量会多一些</span>'
-    : '<span class="warn">完整模式: 所有美化 pass 都跑, 650KB 约 40 秒, 输出更漂亮</span>');
+    ? '<span class="ok">已切到快速模式: 650KB 约 13 秒, 输出临时变量多一些</span>'
+    : '<span class="warn">已切到完整模式: 650KB 约 40 秒(手机更久), 输出更漂亮</span>');
 });
-$("btnMode").classList.add("primary");
+paintMode();
 
 // 本地加速按钮
 $("btnLocal").addEventListener("click", async () => {
