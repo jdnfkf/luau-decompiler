@@ -120,8 +120,19 @@
       <span class="stat" id="localStat">未检测</span>
       <button id="btnClean" title="如果提示引擎加载失败或结果不对，点这个清掉浏览器缓存重新加载">🧹 清缓存重载</button>
       <span class="badge" id="verBadge" title="引擎版本">v3</span>
-      <input id="port" type="number" value="8787" min="1" max="65535" style="width:78px;background:var(--panel2);border:1px solid var(--line);border-radius:6px;color:var(--fg);padding:6px 8px;font:13px var(--mono)">
-      <span class="stat">端口</span>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <span class="stat">🖥 反编译服务器</span>
+      <input id="server" type="text" placeholder="留空=自动找本机 8787 (Termux)，也可填 http://192.168.x.x:8787"
+             style="flex:1;min-width:220px;background:var(--panel2);border:1px solid var(--line);border-radius:6px;color:var(--fg);padding:6px 8px;font:13px var(--mono)">
+      <button id="btnServer" title="连上这个服务器, 之后所有反编译都在服务器上算">🔗 连接</button>
+      <span class="badge" id="srvBadge">未连接</span>
+    </div>
+    <div class="note" style="margin-top:8px">
+      💡 <b>服务器模式</b>（和官网一样）：文件直接传到服务器算，手机零下载、秒出结果。
+      Termux 里跑 <code>./luau-api.sh</code> 就有服务器了 —— 见
+      <a href="https://github.com/jdnfkf/luau-decompiler#服务器模式" target="_blank" style="color:var(--acc)">README</a>。
+      没有服务器时才会退回浏览器内引擎（首次要下 11MB，手机上较慢）。
     </div>
     <div id="prog"><div id="bar"></div></div>
     <div class="working" id="working" style="display:none">
@@ -270,41 +281,65 @@ function buildOpts(fast) {
 
 const DEFAULT_OPTS = buildOpts(fastMode);
 
-// ---------- 本地加速 (Termux 原生引擎, 快 10~50 倍) ----------
-// 浏览器把 127.0.0.1 视为安全源, 所以 HTTPS 页面也能请求 http://127.0.0.1
-let localOn = false;
-function localBase() {
-  const p = ($("port") && $("port").value) || "8787";
-  return "http://127.0.0.1:" + p;
+// ---------- 服务器模式 (和官网一样: 浏览器只传文件, 服务器算) ----------
+//  这是首选路径: 手机零下载、秒出结果、输出质量等同官方引擎。
+//  127.0.0.1 被浏览器当作安全源, 所以 HTTPS 页面也能请求 http://127.0.0.1
+let srvBase = "";           // 连上的服务器地址, 空 = 没连
+let localOn = false;        // 兼容旧字段(=srvBase 非空)
+
+function serverUrl() {
+  const v = ($("server") && $("server").value || "").trim();
+  return v.replace(/\/+$/, "");
 }
-async function probeLocal() {
+function paintSrv(ok, msg) {
+  const b = $("srvBadge");
+  if (b) {
+    b.textContent = ok ? "✅ 已连接" : "未连接";
+    b.className = "badge " + (ok ? "on" : "off");
+  }
+  const s = $("localStat");
+  if (s) s.innerHTML = ok ? '<span class="ok">✅ ' + msg + "</span>" : '<span class="warn">' + msg + "</span>";
+}
+async function probeServer(base) {
+  base = (base || serverUrl() || "http://127.0.0.1:8787").replace(/\/+$/, "");
   const ctl = new AbortController();
-  const to = setTimeout(() => ctl.abort(), 2500);
+  const to = setTimeout(() => ctl.abort(), 3000);
   try {
-    const r = await fetch(localBase() + "/health", { signal: ctl.signal, cache: "no-store" });
+    const r = await fetch(base + "/health", { signal: ctl.signal, cache: "no-store" });
     if (r.ok) {
       const j = await r.json();
       if (j && j.ok) {
-        localOn = true;
-        $("localStat").innerHTML = '<span class="ok">✅ 已连接本地引擎 (原生, 最快)</span>';
+        srvBase = base; localOn = true;
+        paintSrv(true, "服务器已连接: " + base + " (原生引擎, 最快)");
         return true;
       }
     }
   } catch (e) { /* 没开服务, 正常 */ }
   finally { clearTimeout(to); }
-  localOn = false;
-  $("localStat").innerHTML = '<span class="warn">未检测到本地服务 (将用浏览器内引擎)</span>';
+  srvBase = ""; localOn = false;
+  paintSrv(false, "没连上服务器, 将用浏览器内引擎");
   return false;
 }
-async function decompileLocal(bytes) {
-  const r = await fetch(localBase() + "/decompile/raw", {
+async function decompileServer(bytes) {
+  const r = await fetch(srvBase + "/decompile/raw", {
     method: "POST",
     // text/plain 是 CORS 简单请求类型, 不用预检, 也避免混合内容被拦
     headers: { "Content-Type": "text/plain;charset=UTF-8" },
     body: bytes
   });
-  if (!r.ok) throw new Error("本地服务返回 HTTP " + r.status);
+  if (!r.ok) throw new Error("服务器返回 HTTP " + r.status);
   return await r.text();
+}
+// zip 整个丢给服务器, 服务端解开挨个算再打包 (官网同款思路, 快得多)
+async function decompileServerZip(zipBytes) {
+  const r = await fetch(srvBase + "/decompile/zip", {
+    method: "POST",
+    headers: { "Content-Type": "application/octet-stream" },
+    body: zipBytes
+  });
+  if (!r.ok) throw new Error("服务器返回 HTTP " + r.status);
+  const st = r.headers.get("X-Batch-Stats");
+  return { zip: await r.blob(), stats: st ? JSON.parse(st) : null };
 }
 
 // ---------- 公开 JS API ----------
@@ -319,8 +354,8 @@ function callEngine(bytes, opts) {
 }
 window.luauDecompile = async function (bytes, opts) {
   const b = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-  if (localOn) {
-    try { return await decompileLocal(b); } catch (e) { /* 掉回 wasm */ }
+  if (srvBase) {
+    try { return await decompileServer(b); } catch (e) { /* 掉回 wasm */ }
   }
   const r = await callEngine(b, opts);
   return r.source;
@@ -401,7 +436,7 @@ function boot() {
         if (d.ok) {
           $("engBadge").textContent = "引擎就绪 ✅";
           $("engBadge").className = "badge on";
-          $("engMsg").innerHTML = "✅ 引擎就绪, 可以拖文件了";
+          $("engMsg").innerHTML = "✅ 浏览器内引擎就绪 (没有服务器时的兜底)";
           $("engBar").style.width = "100%";
         } else {
           $("engBadge").textContent = "引擎加载失败 ❌";
@@ -440,6 +475,19 @@ function boot() {
     $("engBadge").className = "badge off";
     setStat('<span class="err">' + String(e && e.message || e) + "</span>");
   }
+}
+
+// 引擎状态条: 服务器模式下直接隐藏 (不用下 11MB)
+function paintEng(text, serverMode) {
+  const card = $("engCard");
+  if (serverMode) {
+    card.style.display = "none";
+    $("engBadge").textContent = "服务器模式 🖥";
+    $("engBadge").className = "badge on";
+    return;
+  }
+  card.style.display = "block";
+  $("engBadge").textContent = text;
 }
 
 function showResult(src, ms, dialect) {
@@ -534,16 +582,52 @@ function zipPaintStats(t0) {
 
 async function handleZip(file) {
   if (!file) return;
-  if (!worker) { setStat('<span class="err">引擎还没加载好</span>'); return; }
   zipRunning = true;
   zipResults = [];
   $("zipCard").style.display = "block";
   $("zipList").innerHTML = "";
   $("zipDl").disabled = true; $("zipCopy").disabled = true;
   $("zipCancel").style.display = "inline-block";
-  $("zipStat").innerHTML = "📦 解压 " + esc(file.name) + " …";
+  $("zipStat").innerHTML = "📦 " + esc(file.name) + " …";
   const t0 = Date.now();
 
+  // ★ 服务器模式: 整个 zip 直接丢给服务器, 服务端解开挨个算再打包回来。
+  //   这就是官网的思路 —— 浏览器不参与计算, 所以手机零下载、极快。
+  if (srvBase) {
+    try {
+      $("zipStat").innerHTML = "📦 整个包发给服务器处理中… ("
+        + (file.size / 1048576).toFixed(2) + " MB)";
+      const buf = new Uint8Array(await file.arrayBuffer());
+      const { zip, stats } = await decompileServerZip(buf);
+      const secs = ((Date.now() - t0) / 1000).toFixed(1);
+      // 服务器已经打包好了, 直接给用户下载
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(zip);
+      a.download = file.name.replace(/\.zip$/i, "") + "_反编译.zip";
+      a.style.display = "none";
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 3000);
+      zipRunning = false;
+      $("zipCancel").style.display = "none";
+      const s = stats || { ok: 0, skipped: 0, failed: 0, total: 0 };
+      $("zipStat").innerHTML = "📦 服务器批量完成 · ✅ <b>" + s.ok + "</b> · ⏭️ 跳过 <b>" + s.skipped +
+        "</b> · ❌ 失败 <b>" + s.failed + "</b> · 用时 <b>" + secs + "</b> 秒 · 已开始下载";
+      setStat('<span class="ok">服务器批量完成, 结果包已下载</span>');
+      return;
+    } catch (e) {
+      $("zipStat").innerHTML = '<span class="err">服务器处理失败: ' + esc(shortErr(e)) + " · 改用浏览器内引擎</span>";
+      await probeServer();
+      if (!srvBase) {
+        if (!worker) {
+          setStat('<span class="err">没有服务器, 浏览器引擎也还没加载好</span>');
+          return;
+        }
+      }
+    }
+  }
+
+  if (!worker) { setStat('<span class="err">引擎还没加载好</span>'); return; }
   try {
     const buf = await file.arrayBuffer();
     const entries = await readZip(buf);
@@ -633,7 +717,6 @@ $("zipCopy").addEventListener("click", async () => {
 async function handle(file) {
   if (!file) return;
   if (/\.zip$/i.test(file.name)) { handleZip(file); return; }
-  if (!worker) { setStat('<span class="err">引擎还没加载好</span>'); return; }
   curName = file.name.replace(/\.(luau|luac|bin|out)$/i, "") + ".lua";
   const kb = file.size / 1024;
   progress(0.15, true);
@@ -642,21 +725,22 @@ async function handle(file) {
     const buf = new Uint8Array(await file.arrayBuffer());
     progress(0.4, true);
 
-    // 优先走本地原生引擎 (快 10~50 倍)
-    if (localOn) {
+    // 优先走服务器 (和官网一样: 文件传过去, 服务器算, 秒回)
+    if (srvBase) {
       startWorking(kb);
       const t0 = Date.now();
       try {
-        const src = await decompileLocal(buf);
+        const src = await decompileServer(buf);
         showResult(src, Date.now() - t0, "");
         return;
       } catch (e) {
-        localOn = false;
-        $("localStat").innerHTML = '<span class="warn">本地服务掉了, 改用浏览器内引擎</span>';
+        srvBase = ""; localOn = false;
+        paintSrv(false, "服务器掉了, 改用浏览器内引擎");
         stopWorking();
       }
     }
 
+    if (!worker) { setStat('<span class="err">引擎还没加载好, 等一下或点「🔗 连接」服务器</span>'); return; }
     startWorking(kb);
     worker.postMessage({ bytes: buf, opts: buildOpts(fastMode) }, [buf.buffer]);
   } catch (e) {
@@ -718,18 +802,38 @@ $("btnClean").addEventListener("click", async () => {
 });
 
 
-// 本地加速按钮
+// 服务器连接
 $("btnLocal").addEventListener("click", async () => {
-  $("localStat").innerHTML = "检测中…";
-  const ok = await probeLocal();
-  if (ok) setStat('<span class="ok">本地引擎已连上, 大文件会快很多 🚀</span>');
+  paintSrv(false, "检测中…");
+  const ok = await probeServer();
+  if (ok) setStat('<span class="ok">服务器已连上, 之后所有反编译都在服务器上算 🚀</span>');
 });
-$("port").addEventListener("change", () => probeLocal());
+$("btnServer").addEventListener("click", async () => {
+  paintSrv(false, "连接中…");
+  const ok = await probeServer();
+  if (ok) {
+    setStat('<span class="ok">已连接 ' + srvBase + ' · 批量 zip 也会整包交给服务器</span>');
+    try { localStorage.setItem("luau_server", srvBase); } catch (e) {}
+  } else {
+    setStat('<span class="err">连不上, 检查地址和服务有没有跑起来</span>');
+  }
+});
+$("server").addEventListener("keydown", (e) => { if (e.key === "Enter") $("btnServer").click(); });
 
-// 启动时自动探一次
-setTimeout(() => probeLocal(), 1200);
-
-boot();
+// 启动时: 先试服务器, 连上了就完全不碰浏览器引擎 (零下载)
+(async function start() {
+  try {
+    const saved = localStorage.getItem("luau_server");
+    if (saved) $("server").value = saved;
+  } catch (e) {}
+  const ok = await probeServer();
+  if (ok) {
+    setStat('<span class="ok">已连上服务器 ' + srvBase + ' · 文件传到服务器算, 手机零下载</span>');
+    paintEng("服务器模式", true);
+  } else {
+    boot();   // 没服务器才退回浏览器内引擎
+  }
+})();
 </script>
 </body>
 </html>
