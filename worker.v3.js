@@ -158,7 +158,22 @@ self.onmessage = async (e) => {
     catch (err) { throw new Error(bootError || String(err)); }
     const t0 = performance.now();
     const dia = detectDialect(bytes);
-    const src = decompile(bytes, opts || DEFAULT_OPTS);
+    let src;
+    try {
+      src = decompile(bytes, opts || DEFAULT_OPTS);
+    } catch (err) {
+      // 快速模式跳掉的那几个 pass, 在复杂文件(尤其是 Roblox 客户端脚本那种
+      // goto/label 多的)上会让 AST 收敛不了 → 自动退回完整模式重跑一次。
+      const o = opts || DEFAULT_OPTS;
+      if (!o.readability || !o.readability.skipPasses) throw err;
+      const full = JSON.parse(JSON.stringify(o));
+      delete full.readability.skipPasses;
+      full.naming = { mode: "heuristic" };     // 完整模式下变量提升过了, 用 heuristic 更可读
+      src = decompile(bytes, full);
+      const ms = performance.now() - t0;
+      self.postMessage({ ok: true, id, dialect: dia, source: src, ms, fallback: true });
+      return;
+    }
     const ms = performance.now() - t0;
     self.postMessage({ ok: true, id, dialect: dia, source: src, ms });
   } catch (err) {
