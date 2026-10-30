@@ -109,10 +109,11 @@
     <div id="drop">
       <div class="ico">📦</div>
       <div class="big"><b>拖进来</b> 或 <b>点击选择</b></div>
-      <div class="note" style="margin-top:6px">支持 .luau / .luac / .bin / .out（Luau 字节码）</div>
+      <div class="note" style="margin-top:6px">支持 .luau / .luac / .bin / .out（Luau 字节码）· 也可以直接丢 <b>.zip</b> 批量反编译</div>
     </div>
-    <input type="file" id="file" accept=".luau,.luac,.bin,.out,application/octet-stream">
+    <input type="file" id="file" accept=".luau,.luac,.bin,.out,.zip,application/octet-stream,application/zip">
     <div class="row" style="margin-top:12px">
+      <button id="btnZip" title="选一个 zip, 里面每个文件夹下的文件都会挨个反编译">📦 批量 zip</button>
       <button id="btnLocal" title="如果你在 Termux 里跑了 luau-api.sh，点这个能快 10 倍">🚀 本地加速</button>
       <button id="btnMode" title="点一下切换模式">📖 切到完整模式</button>
       <span class="badge" id="modeBadge">当前: ⚡ 快速 (13 秒)</span>
@@ -147,6 +148,18 @@
       读代码没问题，<b>要精确到每一行请对照原始文件</b>。
     </div>
     <pre id="out"></pre>
+  </div>
+
+  <div class="card" id="zipCard" style="display:none">
+    <div class="row" style="justify-content:space-between;margin-bottom:10px">
+      <div class="stat" id="zipStat">📦 批量反编译</div>
+      <div class="row">
+        <button class="primary" id="zipDl" disabled>⬇ 下载全部 (zip)</button>
+        <button id="zipCopy" disabled>⧉ 复制全部</button>
+        <button id="zipCancel" style="display:none">⛔ 停止</button>
+      </div>
+    </div>
+    <div id="zipList" style="max-height:440px;overflow:auto;font:12.5px var(--mono);border:1px solid var(--line);border-radius:8px"></div>
   </div>
 
   <div class="card">
@@ -206,6 +219,8 @@ const dia = await window.luauDetect(uint8array);   // → "luau" / "luaujit" / .
 </div>
 
 <script type="module">
+import { readZip, makeZip } from "./zip.js?v=1";
+
 const $ = (id) => document.getElementById(id);
 let worker = null, currentSource = "", curName = "output.lua";
 let seq = 0;
@@ -433,8 +448,180 @@ function showResult(src, ms, dialect) {
   setTimeout(() => progress(0, false), 600);
 }
 
+// ============================================================
+//  ZIP 批量反编译
+//  上传一个 zip → 把里面所有文件夹下的文件挨个反编译
+//  · 解压用浏览器原生 DecompressionStream, 零依赖, 不用 CDN
+//  · 目录结构原样保留, 输出还是 zip
+// ============================================================
+let zipRunning = false;
+let zipResults = [];
+
+function esc(s) {
+  return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+function shortErr(e) {
+  let m = "";
+  try { m = (e && e.message) ? String(e.message) : String(e); } catch (_) { m = String(e); }
+  m = m.replace(/\s+/g, " ").trim();
+  return m.length > 90 ? m.slice(0, 90) + "…" : m;
+}
+// 判断这是不是 Luau 字节码
+//  · 字节码第 1 个字节 = 字节码版本号 (1~16), 后面紧跟类型版本
+//  · 混淆过的字节码版本号会被乘过 key (最大 31), 所以放宽到 1~31
+//  · 合法 UTF-8 且首字节不在 1~31 → 当作文本 (源码 / 说明文件 / json)
+function isBytecodeLike(b) {
+  if (!b || b.length < 8) return false;
+  const v = b[0];
+  if (v >= 1 && v <= 31) return true;
+  try {
+    new TextDecoder("utf-8", { fatal: true }).decode(b.subarray(0, 256));
+    return false;                 // 能当 UTF-8 解出来 → 文本
+  } catch (_) {
+    return true;                  // 解不出来 → 二进制, 当字节码试
+  }
+}
+function isJunkPath(p) {
+  return p.endsWith("/") || p.indexOf("__MACOSX/") >= 0 || /(^|\/)\.[^/]+$/.test(p);
+}
+
+function zipRowEl(r) {
+  const el = document.createElement("div");
+  el.style.cssText = "padding:6px 10px;border-bottom:1px solid var(--line);display:flex;gap:10px;align-items:center";
+  const icon = r.status === "ok" ? "✅" : r.status === "skip" ? "⏭️" : r.status === "busy" ? "⏳" : "❌";
+  const color = r.status === "ok" ? "#7ddc7d" : r.status === "skip" ? "#8b949e" : r.status === "busy" ? "#f0c674" : "#ff7b72";
+  const right = r.status === "ok"
+    ? esc(r.size.toLocaleString() + " 字符")
+    : esc(r.err || (r.status === "busy" ? "排队中…" : "失败"));
+  el.innerHTML =
+    '<span>' + icon + '</span>' +
+    '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(r.path) + '</span>' +
+    '<span style="color:' + color + ';max-width:46%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + right + '</span>' +
+    '<span style="color:#6e7681;width:72px;text-align:right;flex:none">' + (r.ms ? r.ms + " ms" : "") + '</span>';
+  if (r.status === "ok") {
+    el.style.cursor = "pointer";
+    el.title = "点这一行看源码";
+    el.addEventListener("click", () => {
+      curName = r.path.split("/").pop() + ".luau";
+      currentSource = r.out;
+      $("out").textContent = r.out;
+      $("outCard").style.display = "block";
+      $("btnDl").disabled = false; $("btnCopy").disabled = false;
+      $("outStat").innerHTML = "<b>" + esc(r.path) + "</b> · " + r.out.length.toLocaleString() + " 字符";
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    });
+  }
+  return el;
+}
+
+function zipPaintStats(t0) {
+  const ok = zipResults.filter(r => r.status === "ok").length;
+  const skip = zipResults.filter(r => r.status === "skip").length;
+  const fail = zipResults.filter(r => r.status === "fail").length;
+  const secs = ((Date.now() - t0) / 1000).toFixed(1);
+  $("zipStat").innerHTML =
+    "共 <b>" + zipResults.length + "</b> 个文件 · ✅ <b>" + ok + "</b> · ⏭️ 跳过 <b>" + skip +
+    "</b> · ❌ 失败 <b>" + fail + "</b> · 用时 <b>" + secs + "</b> 秒";
+}
+
+async function handleZip(file) {
+  if (!file) return;
+  if (!worker) { setStat('<span class="err">引擎还没加载好</span>'); return; }
+  zipRunning = true;
+  zipResults = [];
+  $("zipCard").style.display = "block";
+  $("zipList").innerHTML = "";
+  $("zipDl").disabled = true; $("zipCopy").disabled = true;
+  $("zipCancel").style.display = "inline-block";
+  $("zipStat").innerHTML = "📦 解压 " + esc(file.name) + " …";
+  const t0 = Date.now();
+
+  try {
+    const buf = await file.arrayBuffer();
+    const entries = await readZip(buf);
+    const list = [];
+    let junk = 0;
+    for (const e of entries) {
+      if (!e.bytes || !e.bytes.length || isJunkPath(e.path)) { junk++; continue; }
+      list.push(e);
+    }
+    $("zipStat").innerHTML = "📦 共 " + entries.length + " 个条目, 待处理 <b>" + list.length + "</b> 个 · 开始…";
+
+    for (let i = 0; i < list.length; i++) {
+      if (!zipRunning) break;
+      const e = list[i];
+      const row = { path: e.path, status: "busy", ms: 0, size: 0, out: "", err: "" };
+      const el = zipRowEl(row);
+      $("zipList").appendChild(el);
+      const t1 = performance.now();
+
+      if (!isBytecodeLike(e.bytes)) {
+        row.status = "skip";
+        row.err = "文本文件, 不是字节码";
+      } else {
+        try {
+          const src = await window.luauDecompile(e.bytes, buildOpts(fastMode));
+          row.out = src; row.status = "ok"; row.size = src.length;
+        } catch (err) {
+          row.status = "fail"; row.err = shortErr(err);
+        }
+      }
+      row.ms = Math.round(performance.now() - t1);
+      zipResults.push(row);
+      el.replaceWith(zipRowEl(row));
+      zipPaintStats(t0);
+      await new Promise(r => setTimeout(r, 0));   // 让界面刷一下, 不然大包会卡住
+    }
+
+    zipRunning = false;
+    $("zipCancel").style.display = "none";
+    zipPaintStats(t0);
+    const ok = zipResults.filter(r => r.status === "ok").length;
+    $("zipDl").disabled = !ok;
+    $("zipCopy").disabled = !ok;
+    setStat('<span class="ok">批量完成: ' + ok + " 个反编译成功</span>");
+  } catch (e) {
+    zipRunning = false;
+    $("zipCancel").style.display = "none";
+    $("zipStat").innerHTML = '<span class="err">批量失败: ' + esc(shortErr(e)) + "</span>";
+  }
+}
+
+$("btnZip").addEventListener("click", () => $("file").click());
+$("zipCancel").addEventListener("click", () => { zipRunning = false; $("zipCancel").style.display = "none"; });
+$("zipDl").addEventListener("click", () => {
+  const okList = zipResults.filter(r => r.status === "ok");
+  if (!okList.length) return;
+  const entries = okList.map(r => ({
+    path: r.path.replace(/(\.[^./\\]+)$/, "") + ".luau",
+    data: r.out
+  }));
+  const report = ["批量反编译报告", "=====================", ""];
+  for (const r of zipResults) {
+    report.push(
+      (r.status === "ok" ? "[成功] " : r.status === "skip" ? "[跳过] " : "[失败] ") +
+      r.path + "  (" + r.ms + " ms)" + (r.err ? "  " + r.err : "")
+    );
+  }
+  entries.push({ path: "_反编译报告.txt", data: report.join("\n") });
+  const blob = makeZip(entries);
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "反编译结果.zip";
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+});
+$("zipCopy").addEventListener("click", async () => {
+  const okList = zipResults.filter(r => r.status === "ok");
+  if (!okList.length) return;
+  const text = okList.map(r => "-- ===== " + r.path + " =====\n" + r.out).join("\n\n");
+  try { await navigator.clipboard.writeText(text); setStat('<span class="ok">已复制 ' + okList.length + " 个文件到剪贴板</span>"); }
+  catch (e) { setStat('<span class="err">复制失败: ' + e.message + "</span>"); }
+});
+
 async function handle(file) {
   if (!file) return;
+  if (/\.zip$/i.test(file.name)) { handleZip(file); return; }
   if (!worker) { setStat('<span class="err">引擎还没加载好</span>'); return; }
   curName = file.name.replace(/\.(luau|luac|bin|out)$/i, "") + ".lua";
   const kb = file.size / 1024;
