@@ -61,11 +61,16 @@ async function fetchWasm(onProgress) {
   } catch (e) { /* 缓存不可用就算了 */ }
 
   // 2) 下载, 断了重试
+  //    ★ 每次尝试都带超时(90秒): 移动网络经常会"连上但卡住不传数据",
+  //      没有 AbortController 的话 fetch 会永远挂着, 页面就一直卡在
+  //      "引擎预热中…", 重试逻辑根本走不到。加了超时才会走重试。
   let lastErr = null;
   for (let attempt = 1; attempt <= 4; attempt++) {
+    const ctl = new AbortController();
+    const to = setTimeout(() => ctl.abort(), 90000);
     try {
       onProgress({ phase: "download", attempt, max: 4 });
-      const res = await fetch(WASM_URL, { cache: "no-store" });
+      const res = await fetch(WASM_URL, { cache: "no-store", signal: ctl.signal });
       if (!res.ok) throw new Error("HTTP " + res.status);
 
       const total = Number(res.headers.get("content-length")) || 0;
@@ -103,6 +108,8 @@ async function fetchWasm(onProgress) {
       lastErr = e;
       onProgress({ phase: "retry", attempt, max: 4, error: String((e && e.message) || e) });
       await new Promise((r) => setTimeout(r, 700 * attempt));
+    } finally {
+      clearTimeout(to);
     }
   }
   throw new Error("引擎下载失败(已重试 4 次): " + String((lastErr && lastErr.message) || lastErr));
