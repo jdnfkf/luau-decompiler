@@ -145,3 +145,41 @@ python3 server/luau_api_server.py --host 0.0.0.0 --port 8787
 
 浏览器把**整个 zip** 原样 POST 给 `/decompile/zip`，服务端解开、挨个反编译、再打包返回。
 目录结构原样保留，附一份 `_反编译报告.txt`（成功/跳过/失败统计）。
+
+---
+
+## ☁️ 官方 API 直连（推荐 · 输出质量最高）
+
+官网 <https://lunaux-decompiler.dev/demo> 是 **浏览器只传文件、服务器算**，所以打开网页零下载、1MB 文件约 1 秒，
+输出带类型标注 / upvalue 注释 / 行号。
+
+**好消息：反编译纯字节码不需要 API Key**（key 只用于 `.rbxl` 场景文件，见官网 `/getkey`）。
+
+**唯一的障碍**：官方 API 不返回 `Access-Control-Allow-Origin` 头，浏览器直连会被同源策略拦掉。
+解决办法是加一层**中转** —— 本仓库提供了现成的 Cloudflare Worker：
+
+### 部署中转（免费，3 分钟）
+
+1. 打开 <https://dash.cloudflare.com> → **Workers & Pages** → Create → Worker
+2. 把 [`official-proxy-worker.js`](official-proxy-worker.js) 的内容整段粘进去 → Deploy
+3. 拿到 `https://xxx.workers.dev` 地址
+
+### 网站里启用
+
+在「☁️ 官方 API」那栏填上这个地址 → 点 **⚡ 直连官方** → 右上角显示「☁️ 官方 API」就成功了。
+
+### 怎么让它永久
+
+| 想要的效果 | 怎么做 |
+|---|---|
+| 永久免费地址 | Cloudflare Worker 的 `xxx.workers.dev` 就是永久的，账号在就在 |
+| 不想记 Worker 地址 | Workers → Settings → Domains → 绑自己的域名二级域名（如 `api.你的域名.com`） |
+| **完全不依赖官方** | 用本仓库的 `server/`（本地引擎，sha256 与官方 v1.4.7 **完全一致**） |
+
+### 🔒 关于「官方会不会挂」
+
+- 官方 API 现在是活的，但第三方服务没有永久承诺 —— 域名可能换、接口可能改。
+- **本仓库 `server/` 里的引擎是官方 v1.4.7 原版**（sha256 `def7b346ba8b...` 与官方下载页一致），
+  所以**哪怕官方哪天关停，本地服务器照样能跑**，这就是最稳的「永久化」。
+- 三种模式随时可切，优先级：**官方 API → 本地/自建服务器 → 浏览器内引擎**。
+
