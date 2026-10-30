@@ -160,6 +160,9 @@
       </div>
     </div>
     <div id="zipList" style="max-height:440px;overflow:auto;font:12.5px var(--mono);border:1px solid var(--line);border-radius:8px"></div>
+    <div class="note" style="margin-top:8px">
+      包里<b>每个文件夹下的文件</b>都会挨个反编译, 目录结构原样保留 · 建议先点「🚀 本地加速」(Termux 里的官方原生引擎, 快 10 倍, Roblox 客户端脚本这种带 goto/label 的只有它能跑)
+    </div>
   </div>
 
   <div class="card">
@@ -416,10 +419,12 @@ function boot() {
       if (!d.ok) {
         stopWorking();
         setStat('<span class="err">反编译失败: ' + d.error + "</span>");
-        progress(1, false);
-        return;
+        progress(1, false);        return;
       }
       showResult(d.source, d.ms.toFixed(0), d.dialect);
+      if (d.fallback) {
+        $("outStat").innerHTML += ' · <span class="warn">快速模式收敛不了, 已自动用完整模式重跑</span>';
+      }
     };
     worker.onerror = (e) => {
       $("engBadge").textContent = "引擎出错 ❌";
@@ -563,7 +568,8 @@ async function handleZip(file) {
           const src = await window.luauDecompile(e.bytes, buildOpts(fastMode));
           row.out = src; row.status = "ok"; row.size = src.length;
         } catch (err) {
-          row.status = "fail"; row.err = shortErr(err);
+          row.status = "fail";
+          row.err = shortErr(err) + " → 开「🚀 本地加速」用官方引擎重跑";
         }
       }
       row.ms = Math.round(performance.now() - t1);
