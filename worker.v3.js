@@ -14,8 +14,8 @@ const VER = "v3";
 const WASM_URL = new URL("./unluac_wasm_bg.v3.wasm?v=" + VER, import.meta.url);
 const CACHE_NAME = "luau-decompiler-wasm-" + VER;
 
+// ★ table-constructors 不能跳 (跳了表构造器会被拆烂, 详见 index.html 注释)
 const FAST_SKIP = [
-  "table-constructors",
   "temp-inline",
   "repeat-root-lifetimes",
   "native-call-frames",
