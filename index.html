@@ -128,11 +128,17 @@
       <button id="btnServer" title="连上这个服务器, 之后所有反编译都在服务器上算">🔗 连接</button>
       <span class="badge" id="srvBadge">未连接</span>
     </div>
+    <div class="row" style="margin-top:8px">
+      <span class="stat">☁️ 官方 API</span>
+      <input id="official" type="text" placeholder="填 Cloudflare Worker 地址 (https://xxx.workers.dev)，直接用官方引擎算"
+             style="flex:1;min-width:220px;background:var(--panel2);border:1px solid var(--line);border-radius:6px;color:var(--fg);padding:6px 8px;font:13px var(--mono)">
+      <button id="btnOfficial" title="通过中转直连官方 LunaUX 引擎, 输出质量最高">⚡ 直连官方</button>
+      <span class="badge" id="offBadge">未启用</span>
+    </div>
     <div class="note" style="margin-top:8px">
-      💡 <b>服务器模式</b>（和官网一样）：文件直接传到服务器算，手机零下载、秒出结果。
-      Termux 里跑 <code>./luau-api.sh</code> 就有服务器了 —— 见
-      <a href="https://github.com/jdnfkf/luau-decompiler#服务器模式" target="_blank" style="color:var(--acc)">README</a>。
-      没有服务器时才会退回浏览器内引擎（首次要下 11MB，手机上较慢）。
+      💡 <b>官方 API 直连</b>（推荐）：<code>official-proxy-worker.js</code> 部署到 Cloudflare Workers（免费 3 分钟），
+      把地址填到上面这栏 —— 用的就是<b>官方引擎</b>，输出带类型标注，1MB 文件约 1 秒，<b>不用下载任何引擎</b>。
+      没有中转就填 Termux 本地服务地址（<code>./luau-api.sh</code>），再没有才退回浏览器内引擎（首次下 11MB，慢）。
     </div>
     <div id="prog"><div id="bar"></div></div>
     <div class="working" id="working" style="display:none">
@@ -342,6 +348,31 @@ async function decompileServerZip(zipBytes) {
   return { zip: await r.blob(), stats: st ? JSON.parse(st) : null };
 }
 
+// ---------- 官方 API 直连 (经 Cloudflare Worker 中转) ----------
+//  走的是官方 LunaUX 引擎本身, 输出质量最高 (带类型标注/upvalue 注释/行号)。
+//  官方原站不给 CORS 头, 所以必须经过一个中转; Worker 部署见 README。
+let offBase = "";
+function bytesToB64(bytes) {
+  let s = "";
+  const CH = 0x8000;
+  for (let i = 0; i < bytes.length; i += CH) {
+    s += String.fromCharCode.apply(null, bytes.subarray(i, i + CH));
+  }
+  return btoa(s);
+}
+async function decompileOfficial(bytes) {
+  const r = await fetch(offBase + "/api/decompile", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ bytecode: bytesToB64(bytes) })
+  });
+  if (!r.ok) {
+    const t = await r.text().catch(() => "");
+    throw new Error("官方 API " + r.status + (t ? ": " + t.slice(0, 120) : ""));
+  }
+  return await r.text();
+}
+
 // ---------- 公开 JS API ----------
 // 用法: const src = await window.luauDecompile(uint8array)
 function callEngine(bytes, opts) {
@@ -354,6 +385,9 @@ function callEngine(bytes, opts) {
 }
 window.luauDecompile = async function (bytes, opts) {
   const b = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  if (offBase) {
+    try { return await decompileOfficial(b); } catch (e) { /* 掉回下一个 */ }
+  }
   if (srvBase) {
     try { return await decompileServer(b); } catch (e) { /* 掉回 wasm */ }
   }
@@ -591,6 +625,49 @@ async function handleZip(file) {
   $("zipStat").innerHTML = "📦 " + esc(file.name) + " …";
   const t0 = Date.now();
 
+  // ★ 官方 API 模式: 逐个文件发给官方引擎 (质量最高)
+  if (offBase) {
+    try {
+      const buf = await file.arrayBuffer();
+      const entries = await readZip(buf);
+      const list = entries.filter(e => e.bytes && e.bytes.length && !isJunkPath(e.path));
+      $("zipStat").innerHTML = "☁️ 官方引擎批量 · 共 <b>" + list.length + "</b> 个文件 · 开始…";
+      for (let i = 0; i < list.length; i++) {
+        if (!zipRunning) break;
+        const e = list[i];
+        const row = { path: e.path, status: "busy", ms: 0, size: 0, out: "", err: "" };
+        const el = zipRowEl(row);
+        $("zipList").appendChild(el);
+        const t1 = performance.now();
+        if (!isBytecodeLike(e.bytes)) {
+          row.status = "skip"; row.err = "文本文件, 不是字节码";
+        } else {
+          try {
+            const src = await decompileOfficial(e.bytes);
+            row.out = src; row.status = "ok"; row.size = src.length;
+          } catch (err) {
+            row.status = "fail"; row.err = shortErr(err);
+          }
+        }
+        row.ms = Math.round(performance.now() - t1);
+        zipResults.push(row);
+        el.replaceWith(zipRowEl(row));
+        zipPaintStats(t0);
+        await new Promise(r => setTimeout(r, 0));
+      }
+      zipRunning = false;
+      $("zipCancel").style.display = "none";
+      zipPaintStats(t0);
+      const ok = zipResults.filter(r => r.status === "ok").length;
+      $("zipDl").disabled = !ok; $("zipCopy").disabled = !ok;
+      setStat('<span class="ok">官方引擎批量完成: ' + ok + " 个成功</span>");
+      return;
+    } catch (e) {
+      $("zipStat").innerHTML = '<span class="err">官方批量失败: ' + esc(shortErr(e)) + " · 改用服务器/浏览器</span>";
+      offBase = ""; $("offBadge").textContent = "未启用"; $("offBadge").className = "badge off";
+    }
+  }
+
   // ★ 服务器模式: 整个 zip 直接丢给服务器, 服务端解开挨个算再打包回来。
   //   这就是官网的思路 —— 浏览器不参与计算, 所以手机零下载、极快。
   if (srvBase) {
@@ -725,7 +802,22 @@ async function handle(file) {
     const buf = new Uint8Array(await file.arrayBuffer());
     progress(0.4, true);
 
-    // 优先走服务器 (和官网一样: 文件传过去, 服务器算, 秒回)
+    // ① 官方 API 直连 (质量最高)
+    if (offBase) {
+      startWorking(kb);
+      const t0 = Date.now();
+      try {
+        const src = await decompileOfficial(buf);
+        showResult(src, Date.now() - t0, "官方 LunaUX");
+        return;
+      } catch (e) {
+        $("offBadge").textContent = "官方失败";
+        $("offBadge").className = "badge off";
+        stopWorking();
+      }
+    }
+
+    // ② 本地/自建服务器
     if (srvBase) {
       startWorking(kb);
       const t0 = Date.now();
@@ -820,18 +912,69 @@ $("btnServer").addEventListener("click", async () => {
 });
 $("server").addEventListener("keydown", (e) => { if (e.key === "Enter") $("btnServer").click(); });
 
+// 官方 API 直连
+async function probeOfficial(base) {
+  base = (base || ($("official").value || "").trim()).replace(/\/+$/, "");
+  if (!base) { offBase = ""; $("offBadge").textContent = "未启用"; $("offBadge").className = "badge off"; return false; }
+  const ctl = new AbortController();
+  const to = setTimeout(() => ctl.abort(), 6000);
+  try {
+    const r = await fetch(base + "/health", { signal: ctl.signal, cache: "no-store" });
+    if (r.ok) {
+      offBase = base;
+      $("offBadge").textContent = "✅ 已启用";
+      $("offBadge").className = "badge on";
+      try { localStorage.setItem("luau_official", base); } catch (e) {}
+      return true;
+    }
+  } catch (e) { /* 没部署 Worker, 正常 */ }
+  finally { clearTimeout(to); }
+  offBase = "";
+  $("offBadge").textContent = "连不上";
+  $("offBadge").className = "badge off";
+  return false;
+}
+$("btnOfficial").addEventListener("click", async () => {
+  $("offBadge").textContent = "连接中…";
+  const ok = await probeOfficial();
+  if (ok) {
+    setStat('<span class="ok">官方引擎已连上 (' + offBase + ') · 输出质量最高, 1MB 约 1 秒</span>');
+    paintEng("官方 API ☁️", true);
+    // 官方优先, 本地服务器就不必再探了
+    srvBase = ""; localOn = false;
+    paintSrv(false, "已改用官方 API");
+  } else {
+    setStat('<span class="err">连不上, 检查 Worker 地址, 或先部署 official-proxy-worker.js</span>');
+  }
+});
+$("official").addEventListener("keydown", (e) => { if (e.key === "Enter") $("btnOfficial").click(); });
+
 // 启动时: 先试服务器, 连上了就完全不碰浏览器引擎 (零下载)
 (async function start() {
   try {
-    const saved = localStorage.getItem("luau_server");
-    if (saved) $("server").value = saved;
+    const so = localStorage.getItem("luau_official");
+    if (so) $("official").value = so;
+    const ss = localStorage.getItem("luau_server");
+    if (ss) $("server").value = ss;
   } catch (e) {}
+
+  // ① 官方 API (质量最高)
+  if (($("official").value || "").trim()) {
+    if (await probeOfficial()) {
+      setStat('<span class="ok">官方引擎已连上 ' + offBase + ' · 输出质量最高</span>');
+      paintEng("官方 API ☁️", true);
+      srvBase = ""; localOn = false;
+      paintSrv(false, "已改用官方 API");
+      return;
+    }
+  }
+  // ② 本地/自建服务器
   const ok = await probeServer();
   if (ok) {
     setStat('<span class="ok">已连上服务器 ' + srvBase + ' · 文件传到服务器算, 手机零下载</span>');
     paintEng("服务器模式", true);
   } else {
-    boot();   // 没服务器才退回浏览器内引擎
+    boot();   // 都没连上才退回浏览器内引擎
   }
 })();
 </script>
