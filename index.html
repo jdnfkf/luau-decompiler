@@ -115,8 +115,8 @@
     <div class="row" style="margin-top:12px">
       <button id="btnZip" title="选一个 zip, 里面每个文件夹下的文件都会挨个反编译">📦 批量 zip</button>
       <button id="btnLocal" title="如果你在 Termux 里跑了 luau-api.sh，点这个能快 10 倍">🚀 本地加速</button>
-      <button id="btnMode" title="点一下切换模式">📖 切到完整模式</button>
-      <span class="badge" id="modeBadge">当前: ⚡ 快速 (13 秒)</span>
+      <button id="btnMode" title="完整模式不跳任何美化 pass, 输出最准, 但慢 3~5 倍">📖 切到完整模式</button>
+      <span class="badge" id="modeBadge">当前: ⚡ 快速 (输出干净)</span>
       <span class="stat" id="localStat">未检测</span>
       <button id="btnClean" title="如果提示引擎加载失败或结果不对，点这个清掉浏览器缓存重新加载">🧹 清缓存重载</button>
       <span class="badge" id="verBadge" title="引擎版本">v3</span>
@@ -231,8 +231,11 @@ const pending = new Map();
 
 // 跳过的 HIR pass —— 这些只影响"输出好不好看", 不影响语义。
 // 跳掉之后连 "closure-effects" 数据流分析都不用算, 大文件能快 3~4 倍。
+// ★ table-constructors 绝对不能跳!
+//   跳了之后表构造器会被拆烂 ({ maxHealth = 100, tags = {"a"} } → "tags = 0" + 报错),
+//   实测 272KB 文件会多出 1401 行 [unluac error] 诊断垃圾。
+//   跳掉下面这 5 个是安全的: 输出干净, 而且快 5 倍 (272KB: 9.5s → 1.9s)
 const FAST_SKIP = [
-  "table-constructors",
   "temp-inline",
   "repeat-root-lifetimes",
   "native-call-frames",
@@ -343,11 +346,11 @@ function startWorking(kb) {
   $("prog").classList.add("busy");
   const hint = fastMode
     ? (kb > 400
-        ? "快速模式 · 大文件在手机浏览器里大概 20~60 秒（引擎是纯 WebAssembly，比电脑慢 2~3 倍）。请保持页面在前台，别锁屏。"
-        : "快速模式 · 手机浏览器里大概 10~30 秒，请保持页面在前台别锁屏。")
+        ? "快速模式 · 实测 973KB ≈ 12 秒、273KB ≈ 8 秒（电脑浏览器）。手机会慢 2~3 倍，请保持页面在前台别锁屏。"
+        : "快速模式 · 实测 273KB ≈ 8 秒（电脑浏览器），手机慢 2~3 倍，请保持页面在前台别锁屏。")
     : (kb > 400
-        ? "完整模式 · 手机上可能要 2~5 分钟（所有美化 pass 都跑）。想要快就点「⚡ 切到快速模式」。"
-        : "完整模式 · 手机上大概 40~90 秒，想要快就点「⚡ 切到快速模式」。");
+        ? "完整模式 · 不跳任何美化 pass，输出最准，但慢 3~5 倍。想要快就点「⚡ 切到快速模式」。"
+        : "完整模式 · 输出最准，慢 3~5 倍。想要快就点「⚡ 切到快速模式」。");
   $("workingHint").textContent = hint;
   t0 = Date.now();
   const tick = () => { $("elapsed").textContent = ((Date.now() - t0) / 1000).toFixed(1); };
@@ -614,8 +617,10 @@ $("zipDl").addEventListener("click", () => {
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
   a.download = "反编译结果.zip";
+  a.style.display = "none";
+  document.body.appendChild(a);
   a.click();
-  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
 });
 $("zipCopy").addEventListener("click", async () => {
   const okList = zipResults.filter(r => r.status === "ok");
@@ -682,7 +687,7 @@ $("btnCopy").addEventListener("click", async () => {
 function paintMode() {
   $("btnMode").textContent = fastMode ? "📖 切到完整模式" : "⚡ 切到快速模式";
   $("btnMode").classList.toggle("primary", !fastMode);
-  $("modeBadge").textContent = fastMode ? "当前: ⚡ 快速 (13 秒)" : "当前: 📖 完整 (40 秒+)";
+  $("modeBadge").textContent = fastMode ? "当前: ⚡ 快速 (输出干净)" : "当前: 📖 完整 (最准, 慢 3~5 倍)";
   $("modeBadge").className = "badge " + (fastMode ? "on" : "off");
 }
 $("btnMode").addEventListener("click", () => {
