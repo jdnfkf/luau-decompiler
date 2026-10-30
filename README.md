@@ -94,3 +94,54 @@ python3 -m http.server 8000
 ## 许可
 
 引擎部分基于 [unluac-rs](https://github.com/x3zvawq/unluac-rs)（MIT），本仓库补丁与网页部分 MIT。
+
+---
+
+## 服务器模式（推荐 · 和官网同款架构）
+
+官网的做法是**浏览器只传文件、服务器算**，所以打开网页零下载、结果秒出。
+本项目现在也是这个架构：
+
+| | 浏览器内引擎（兜底） | 服务器模式（推荐） |
+|---|---|---|
+| 首次打开 | 要下 11MB WASM | **0 下载** |
+| 单文件 (485KB) | 8 秒 | **19 ms** |
+| zip 批量 | 8 秒+ | **0.5 秒** |
+| 输出质量 | 诊断式伪代码 | **官方引擎**（带类型标注 / upvalue 注释 / 行号） |
+
+### 启动服务器
+
+**手机 (Termux)** —— 用交付包里的离线引擎（官方原生 `.so`，ARM 走 qemu）：
+
+```bash
+cd "/storage/emulated/0/1/LunaUX反编译工具-1/lunaux-offline"
+nohup ./luau-api.sh > /dev/null 2>&1 &
+```
+
+**电脑 (Linux)**：
+
+```bash
+python3 server/luau_api_server.py --host 0.0.0.0 --port 8787
+```
+
+### 网站里连上
+
+页面打开会自动找 `127.0.0.1:8787`；连不上就手动填：
+
+- 手机自己访问 → `http://127.0.0.1:8787`
+- 电脑上的服务器 → `http://192.168.x.x:8787`
+
+### 服务器接口
+
+| 接口 | 说明 |
+|---|---|
+| `GET /health` | 探活 `{"ok":true,"engine":"lunaux"}` |
+| `POST /decompile/raw` | body = 字节码二进制 → 源码纯文本 |
+| `POST /decompile` | JSON `{"bytecode":"<base64>"}` → 源码纯文本 |
+| `POST /decompile/zip` | body = zip 二进制 → **zip**（每个字节码文件对应一个 `.luau`，目录结构保留，附 `_反编译报告.txt`） |
+| `GET /disasm?b64=..` | 反汇编 |
+
+### zip 批量（服务端版）
+
+浏览器把**整个 zip** 原样 POST 给 `/decompile/zip`，服务端解开、挨个反编译、再打包返回。
+目录结构原样保留，附一份 `_反编译报告.txt`（成功/跳过/失败统计）。
